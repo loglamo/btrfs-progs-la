@@ -1,4 +1,4 @@
-### ``btrfs-progs-la'' creates multiple partitions with their super blocks and filesystem trees at mkfs.btrfs on a single disk.
+### "btrfs-progs-la" creates multiple partitions with their super blocks and filesystem trees at mkfs.btrfs on a single device.
 
 #### Required tools/libraries to build:
 

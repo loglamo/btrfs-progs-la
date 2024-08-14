@@ -156,6 +156,14 @@ static inline u64 btrfs_sb_offset(int mirror)
 		return BTRFS_SB_MIRROR_OFFSET(mirror);
 	return BTRFS_SUPER_INFO_OFFSET;
 }
+static inline u64 btrfs_sb_offset_mp(int mirror, u64 sb_offset)
+{
+	if (mirror == 1)
+		return BTRFS_SUPER_INFO_OFFSET_1 + sb_offset;
+    else if (mirror == 2)
+        return BTRFS_SUPER_INFO_OFFSET_2 + sb_offset;
+	return BTRFS_SUPER_INFO_OFFSET + sb_offset;
+}
 
 struct btrfs_device;
 
@@ -211,6 +219,8 @@ int write_all_supers(struct btrfs_fs_info *fs_info);
 int write_ctree_super(struct btrfs_trans_handle *trans);
 int btrfs_check_super(struct btrfs_super_block *sb, unsigned sbflags);
 int btrfs_read_dev_super(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
+		unsigned sbflags);
+int btrfs_read_dev_super_mp(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
 		unsigned sbflags);
 int btrfs_map_bh_to_logical(struct btrfs_root *root, struct extent_buffer *bh,
 			    u64 logical);

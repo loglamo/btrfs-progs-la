@@ -230,7 +230,7 @@ int btrfs_register_one_device(const char *fname)
 	int fd;
 	int ret;
 
-    printf("___Register device to /dev/btrfs-control\n");
+    printf("___Register device %s to /dev/btrfs-control\n", fname);
     fd = open("/dev/btrfs-control", O_RDWR);
 	if (fd < 0) {
 		warning(
@@ -239,9 +239,9 @@ int btrfs_register_one_device(const char *fname)
 	}
 	memset(&args, 0, sizeof(args));
    // fname = "nvme0n1-0";
-   fname = "/dev/nvme0n1";
+   //fname = "/dev/nvme0n1";
    args.fd = 1;
-   printf("___fname from register device %s\n", fname);
+   //printf("___fname from register device %s\n", fname);
 	strncpy_null(args.name, fname);
 	ret = ioctl(fd, BTRFS_IOC_SCAN_DEV, &args);
 	if (ret < 0) {

@@ -315,7 +315,7 @@ static struct btrfs_device *find_device(struct btrfs_fs_devices *fs_devices,
 	list_for_each_entry(dev, head, dev_list) {
 		if (dev->devid == devid &&
 		    (!uuid || !memcmp(dev->uuid, uuid, BTRFS_UUID_SIZE))) {
-            printf("__Find device: satisfied dev with id %d \n", dev->devid);
+            //printf("__Find device: satisfied dev with id %d \n", dev->devid);
 			return dev;
 		}
 	}
@@ -528,7 +528,7 @@ static int device_list_add(const char *path,
 			       BTRFS_FSID_SIZE);
 
 		fs_devices->latest_devid = devid;
-        printf("__Device list add: devid from fs_devices is %d\n", devid);
+        //printf("__Device list add: devid from fs_devices is %d\n", devid);
 		/* Below we would set this to found_transid */
 		fs_devices->latest_generation = 0;
 		fs_devices->lowest_devid = (u64)-1;
@@ -732,7 +732,8 @@ int btrfs_scan_one_device(int fd, const char *path,
 	int ret;
     
     
-	ret = btrfs_read_dev_super(fd, &disk_super, super_offset, sbflags);
+	//ret = btrfs_read_dev_super(fd, &disk_super, super_offset, sbflags);
+	ret = btrfs_read_dev_super_mp(fd, &disk_super, super_offset, sbflags);
     //printf("Bytenr of disk super at scanning is %llu\n", disk_super.bytenr);
     //printf("Return is %d\n", ret);
 	if (ret < 0)

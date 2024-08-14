@@ -1210,6 +1210,10 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	char *label = NULL;
 	int nr_global_roots = sysconf(_SC_NPROCESSORS_ONLN);
 	char *source_dir = NULL;
+    // La: For array of super blocks and file systems
+    int nr_mp = 64; // For testing
+    struct btrfs_fs_info *fs_info_mp[nr_mp];
+    struct btrfs_super_block *sb[nr_mp];
 
 	cpu_detect_flags();
 	hash_init_accel();
@@ -1778,9 +1782,12 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		printf("\n");
 	}
     // La: multiple partitions
-    int part_num = 8;
-    u64 part_size = floor(dev_byte_count/part_num);
+    //int part_num = nr_mp;
+    int part_num = sysconf(_SC_NPROCESSORS_ONLN);
+    //part_num = 1; 
+    u64 part_size = dev_byte_count/part_num;
     part_size = (part_size/4096)*4096;
+    printf("The number of partitions is %d\n", part_num);
     printf("Partition size is %llu\n", part_size);
 
 	mkfs_cfg.label = label;
@@ -1802,7 +1809,13 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
     //struct btrfs_super_block sb_mp[part_num];
     //struct btrfs_fs_info info_mp[part_num];
 
-	ret = make_btrfs_mp(prepare_ctx[0].fd, &mkfs_cfg);
+    int iter;
+
+// La: For new defined super blocks
+if (part_num > 1) {
+for (int k = 1; k < part_num; k++) {
+    iter = k;
+	ret = make_btrfs_mp(prepare_ctx[0].fd, &mkfs_cfg, k);
 	if (ret) {
 		errno = -ret;
 		error("error during mkfs: %m");
@@ -1812,9 +1825,12 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 	oca.filename = file;
 	oca.flags = OPEN_CTREE_WRITES | OPEN_CTREE_TEMPORARY_SUPER;
     oca.sb_bytenr = mkfs_cfg.super_bytenr;
+    oca.chunk_tree_bytenr = mkfs_cfg.blocks[MKFS_CHUNK_TREE];
     //printf("BOX_MAIN: oca->sb_bytenr is %llu\n", oca.sb_bytenr);
 
-	fs_info = open_ctree_fs_info(&oca);
+	//fs_info = open_ctree_fs_info(&oca);
+	//fs_info = fs_info_mp + sizeof(struct btrfs_fs_info)*k;
+    fs_info = open_ctree_fs_info(&oca);
 	if (!fs_info) {
 		error("open ctree failed");
 		goto error;
@@ -1828,7 +1844,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		goto error;
 	}
     
-    printf("BOX_MAIN: Go to setup raid\n");
+    //printf("BOX_MAIN: Go to setup raid\n");
 	if (features.incompat_flags & BTRFS_FEATURE_INCOMPAT_RAID_STRIPE_TREE) {
 		ret = setup_raid_stripe_tree_root(fs_info);
         printf("__ret from setup RAID is %d\n", ret);
@@ -1838,7 +1854,8 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		}
 	}
 
-	trans = btrfs_start_transaction(root, 1);
+	//struct btrfs_trans_handle *trans_k;
+	trans= btrfs_start_transaction(root, 1);
 	if (IS_ERR(trans)) {
 		errno = -PTR_ERR(trans);
 		error_msg(ERROR_MSG_START_TRANS, "%m");
@@ -1865,9 +1882,9 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 		goto error;
 	}
     
-    printf("BOX_MAIN: Go to start transaction\n");
+    //printf("BOX_MAIN: Go to start transaction\n");
 	ret = btrfs_commit_transaction(trans, root);
-    printf("__ret from commit trans is %d\n", ret);
+    //printf("__ret from commit trans is %d\n", ret);
 	if (ret) {
 		errno = -ret;
 		error_msg(ERROR_MSG_COMMIT_TRANS, "%m");
@@ -1886,7 +1903,7 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 
 	for (i = 1; i < device_count; i++) {
 		ret = btrfs_device_already_in_root(root, prepare_ctx[i].fd,
-						   BTRFS_SUPER_INFO_OFFSET);
+						   BTRFS_SUPER_INFO_OFFSET + BTRFS_SUPER_INFO_SIZE*k);
         printf("__ret from checking duplicate device\n");
 		if (ret) {
 			error("skipping duplicate device %s in the filesystem",
@@ -1920,6 +1937,300 @@ int BOX_MAIN(mkfs)(int argc, char **argv)
 
 	if (opt_zoned)
 		btrfs_get_dev_zone_info_all_devices(fs_info);
+
+	ret = create_raid_groups(trans, root, data_profile,
+			 metadata_profile, mixed, &allocation);
+	if (ret) {
+		error("unable to create raid groups: %d", ret);
+		goto out;
+	}
+
+	/*
+	 * Commit current transaction so we can COW all existing tree blocks
+	 * to newly created raid groups.
+	 * As currently we use btrfs_search_slot() to COW tree blocks in
+	 * recow_roots(), if a tree block is already modified in current trans,
+	 * it won't be re-COWed, thus it will stay in temporary chunks.
+	 */
+
+    //printf("BOX_MAIN: Go to raid_groups\n");
+	ret = btrfs_commit_transaction(trans, root);
+	if (ret) {
+		errno = -ret;
+		error_msg(ERROR_MSG_COMMIT_TRANS, "before recowing trees: %m");
+		goto out;
+	}
+	trans = btrfs_start_transaction(root, 1);
+	if (IS_ERR(trans)) {
+		errno = -PTR_ERR(trans);
+		error_msg(ERROR_MSG_START_TRANS, "%m");
+		goto error;
+	}
+	/* COW all tree blocks to newly created chunks */
+	ret = recow_roots(trans, root);
+	if (ret) {
+		errno = -ret;
+		error("unable to COW tree blocks to new profiles: %m");
+		goto out;
+	}
+
+	ret = create_data_reloc_tree(trans);
+	if (ret) {
+		error("unable to create data reloc tree: %d", ret);
+		goto out;
+	}
+
+	ret = create_uuid_tree(trans);
+	if (ret)
+		warning(
+	"unable to create uuid tree, will be created after mount: %d", ret);
+
+	ret = btrfs_commit_transaction(trans, root);
+	if (ret) {
+		errno = -ret;
+		error_msg(ERROR_MSG_START_TRANS, "%m");
+		goto out;
+	}
+
+	ret = cleanup_temp_chunks(fs_info, &allocation, data_profile,
+				  metadata_profile, metadata_profile);
+	if (ret < 0) {
+		error("failed to cleanup temporary chunks: %d", ret);
+		goto out;
+	}
+
+	if (source_dir) {
+		pr_verbose(LOG_DEFAULT, "Rootdir from:       %s\n", source_dir);
+		ret = btrfs_mkfs_fill_dir(source_dir, root);
+		if (ret) {
+			error("error while filling filesystem: %d", ret);
+			goto out;
+		}
+		if (shrink_rootdir) {
+			pr_verbose(LOG_DEFAULT, "  Shrink:           yes\n");
+			ret = btrfs_mkfs_shrink_fs(fs_info, &shrink_size,
+						   shrink_rootdir);
+			if (ret < 0) {
+				error("error while shrinking filesystem: %d",
+					ret);
+				goto out;
+			}
+		} else {
+			pr_verbose(LOG_DEFAULT, "  Shrink:           no\n");
+		}
+	}
+
+	if (features.runtime_flags & BTRFS_FEATURE_RUNTIME_QUOTA ||
+	    features.incompat_flags & BTRFS_FEATURE_INCOMPAT_SIMPLE_QUOTA) {
+		ret = setup_quota_root(fs_info);
+		if (ret < 0) {
+			error("failed to initialize quota: %d (%m)", ret);
+			goto out;
+		}
+	}
+	if (bconf.verbose) {
+		char features_buf[BTRFS_FEATURE_STRING_BUF_SIZE];
+
+		update_chunk_allocation(fs_info, &allocation);
+		printf("Label:              %s\n", label);
+		printf("UUID:               %s\n", mkfs_cfg.fs_uuid);
+		if (dev_uuid[0] != 0)
+			printf("Device UUID:        %s\n", mkfs_cfg.dev_uuid);
+		printf("Node size:          %u\n", nodesize);
+		printf("Sector size:        %u\t(CPU page size: %lu)\n",
+		       sectorsize, sysconf(_SC_PAGESIZE));
+		printf("Filesystem size:    %s\n",
+			pretty_size(btrfs_super_total_bytes(fs_info->super_copy)));
+		printf("Block group profiles:\n");
+		if (allocation.data)
+			printf("  Data:             %-8s %16s\n",
+				btrfs_group_profile_str(data_profile),
+				pretty_size(allocation.data));
+		if (allocation.metadata)
+			printf("  Metadata:         %-8s %16s\n",
+				btrfs_group_profile_str(metadata_profile),
+				pretty_size(allocation.metadata));
+		if (allocation.mixed)
+			printf("  Data+Metadata:    %-8s %16s\n",
+				btrfs_group_profile_str(data_profile),
+				pretty_size(allocation.mixed));
+		printf("  System:           %-8s %16s\n",
+			btrfs_group_profile_str(metadata_profile),
+			pretty_size(allocation.system));
+		printf("SSD detected:       %s\n", ssd ? "yes" : "no");
+		printf("Zoned device:       %s\n", opt_zoned ? "yes" : "no");
+		if (opt_zoned)
+			printf("  Zone size:        %s\n",
+			       pretty_size(fs_info->zone_size));
+		btrfs_parse_fs_features_to_string(features_buf, &features);
+		printf("Features:           %s\n", features_buf);
+		printf("Checksum:           %s\n",
+		       btrfs_super_csum_name(mkfs_cfg.csum_type));
+
+		list_all_devices(root, opt_zoned);
+
+		if (mkfs_cfg.csum_type == BTRFS_CSUM_TYPE_SHA256) {
+			printf(
+"NOTE: you may need to manually load kernel module implementing accelerated SHA256 in case\n"
+"      the generic implementation is built-in, before mount. Check lsmod or /proc/crypto\n\n"
+);
+		}
+	}
+
+	/*
+	 * The filesystem is now fully set up, commit the remaining changes and
+	 * fix the signature as the last step before closing the devices.
+	 */
+    // La: Be here successful...
+	fs_info->finalize_on_close = 1;
+	close_ret = close_ctree(root);
+
+	if (!close_ret) {
+		optind = saved_optind;
+		device_count = argc - optind;
+		
+        while (device_count-- > 0) {
+			file = argv[optind++];
+			if (path_is_block_device(file) == 1) {
+                if (iter == 0)
+				    btrfs_register_one_device(file);
+            }
+		}
+        
+	}
+
+	if (!ret && close_ret) {
+		ret = close_ret;
+		error("failed to close ctree, the filesystem may be inconsistent: %d",
+		      ret);
+
+     }
+}
+}
+
+// For primary super block
+    iter = 0;
+	ret = make_btrfs_mp(prepare_ctx[0].fd, &mkfs_cfg, 0);
+	if (ret) {
+		errno = -ret;
+		error("error during mkfs: %m");
+		goto error;
+	}
+
+	oca.filename = file;
+	oca.flags = OPEN_CTREE_WRITES | OPEN_CTREE_TEMPORARY_SUPER;
+    oca.sb_bytenr = mkfs_cfg.super_bytenr;
+    oca.chunk_tree_bytenr = mkfs_cfg.blocks[MKFS_CHUNK_TREE];
+
+	//fs_info = fs_info_mp + sizeof(struct btrfs_fs_info)*0;
+    fs_info = open_ctree_fs_info(&oca);
+	if (!fs_info) {
+		error("open ctree failed");
+		goto error;
+	}
+
+	root = fs_info->fs_root;
+
+	ret = create_metadata_block_groups(root, mixed, &allocation);
+	if (ret) {
+		error("failed to create default block groups: %d", ret);
+		goto error;
+	}
+    
+    //printf("BOX_MAIN: Go to setup raid\n");
+	if (features.incompat_flags & BTRFS_FEATURE_INCOMPAT_RAID_STRIPE_TREE) {
+		ret = setup_raid_stripe_tree_root(fs_info);
+        printf("__ret from setup RAID is %d\n", ret);
+		if (ret < 0) {
+			error("failed to initialize raid-stripe-tree: %d (%m)", ret);
+			goto out;
+		}
+	}
+
+	//struct btrfs_trans_handle *trans_k;
+	trans= btrfs_start_transaction(root, 1);
+	if (IS_ERR(trans)) {
+		errno = -PTR_ERR(trans);
+		error_msg(ERROR_MSG_START_TRANS, "%m");
+		goto error;
+	}
+
+	ret = create_data_block_groups(trans, root, mixed, &allocation);
+	if (ret) {
+		error("failed to create default data block groups: %d", ret);
+		goto error;
+	}
+
+	if (features.incompat_flags & BTRFS_FEATURE_INCOMPAT_EXTENT_TREE_V2) {
+		ret = create_global_roots(trans, nr_global_roots);
+		if (ret) {
+			error("failed to create global roots: %d", ret);
+			goto error;
+		}
+	}
+
+	ret = make_root_dir(trans, root);
+	if (ret) {
+		error("failed to setup the root directory: %d", ret);
+		goto error;
+	}
+    
+    //printf("BOX_MAIN: Go to start transaction\n");
+	ret = btrfs_commit_transaction(trans, root);
+    //printf("__ret from commit trans is %d\n", ret);
+	if (ret) {
+		errno = -ret;
+		error_msg(ERROR_MSG_COMMIT_TRANS, "%m");
+		goto out;
+	}
+
+	trans = btrfs_start_transaction(root, 1);
+	if (IS_ERR(trans)) {
+		errno = -PTR_ERR(trans);
+		error_msg(ERROR_MSG_START_TRANS, "%m");
+		goto error;
+	}
+
+	if (device_count == 0)
+		goto raid_groups;
+
+	for (i = 1; i < device_count; i++) {
+		ret = btrfs_device_already_in_root(root, prepare_ctx[i].fd,
+						   BTRFS_SUPER_INFO_OFFSET);
+       // printf("__ret from checking duplicate device\n");
+		if (ret) {
+			error("skipping duplicate device %s in the filesystem",
+				file);
+			continue;
+		}
+		dev_byte_count = prepare_ctx[i].dev_byte_count;
+
+		if (prepare_ctx[i].ret) {
+			errno = -prepare_ctx[i].ret;
+			error("unable to prepare device %s: %m", prepare_ctx[i].file);
+			goto error;
+		}
+
+		ret = btrfs_add_to_fsid(trans, root, prepare_ctx[i].fd,
+					prepare_ctx[i].file, dev_byte_count,
+					sectorsize, sectorsize, sectorsize);
+		if (ret) {
+			error("unable to add %s to filesystem: %d",
+			      prepare_ctx[i].file, ret);
+			goto error;
+		}
+		if (bconf.verbose >= 2) {
+			struct btrfs_device *device;
+
+			device = container_of(fs_info->fs_devices->devices.next,
+					struct btrfs_device, dev_list);
+			printf("adding device %s id %llu\n", file, device->devid);
+		}
+	}
+
+	if (opt_zoned)
+		btrfs_get_dev_zone_info_all_devices(fs_info);
+
 
 raid_groups:
 	ret = create_raid_groups(trans, root, data_profile,
@@ -2069,22 +2380,24 @@ raid_groups:
 	fs_info->finalize_on_close = 1;
 out:
 	close_ret = close_ctree(root);
-    printf("__root object id is %llu with type of %u\n", root->objectid, root->type);
+    //printf("__root object id is %llu with type of %u\n", root->objectid, root->type);
     //printf("__ret from close_ctree is %d\n", close_ret);
 
 	if (!close_ret) {
 		optind = saved_optind;
 		device_count = argc - optind;
-        printf("___argc here is %d\n", argc);
-        printf("___optind here is %d\n", optind);
-        printf("___device_count is %d\n", device_count);
+        //printf("___argc here is %d\n", argc);
+        //printf("___optind here is %d\n", optind);
+        //printf("___device_count is %d\n", device_count);
 		
         while (device_count-- > 0) {
-            printf("___device_count is %d\n", device_count);
+            //printf("___device_count is %d\n", device_count);
 			file = argv[optind++];
-            printf("____file is %s\n", file);
-			if (path_is_block_device(file) == 1)
-				btrfs_register_one_device(file);
+            //printf("____file is %s\n", file);
+			if (path_is_block_device(file) == 1) {
+                if (iter == 0)
+				    btrfs_register_one_device(file);
+            }
 		}
         
 	}

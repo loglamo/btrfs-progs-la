@@ -77,6 +77,8 @@ static inline u32 __BTRFS_LEAF_DATA_SIZE(u32 nodesize)
 #define BTRFS_LEAF_DATA_SIZE(fs_info) (fs_info->leaf_data_size)
 
 #define BTRFS_SUPER_INFO_OFFSET			(65536)
+#define BTRFS_SUPER_INFO_OFFSET_1			(339968)
+#define BTRFS_SUPER_INFO_OFFSET_2			(679936)
 #define BTRFS_SUPER_INFO_SIZE			(4096)
 
 /*

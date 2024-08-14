@@ -1408,7 +1408,7 @@ int btrfs_scan_fs_devices(int fd, const char *path,
 	if (!sb_bytenr)
 		sb_bytenr = BTRFS_SUPER_INFO_OFFSET;
 
-    printf("sb_bytenr at scanning is %llu\n", sb_bytenr);
+    //printf("sb_bytenr at scanning is %llu\n", sb_bytenr);
 
 	seek_ret = lseek(fd, 0, SEEK_END);
 	if (seek_ret < 0)
@@ -1457,8 +1457,8 @@ int btrfs_setup_chunk_tree_and_device_map(struct btrfs_fs_info *fs_info,
 
 	if (chunk_root_bytenr && !IS_ALIGNED(chunk_root_bytenr,
 					    fs_info->sectorsize)) {
-        printf("setup_chunk_tree_and_device_map: chunk_root_bytenr is %llu\n", chunk_root_bytenr);
-        printf("setup_chunk_tree_and_device_map: aligned sectorsize is %llu\n", fs_info->sectorsize);
+        //printf("setup_chunk_tree_and_device_map: chunk_root_bytenr is %llu\n", chunk_root_bytenr);
+        //printf("setup_chunk_tree_and_device_map: aligned sectorsize is %llu\n", fs_info->sectorsize);
 		warning("chunk_root_bytenr %llu is unaligned to %u, ignore it",
 			chunk_root_bytenr, fs_info->sectorsize);
 		chunk_root_bytenr = 0;
@@ -1568,13 +1568,13 @@ static struct btrfs_fs_info *__open_ctree_fd(int fp, struct open_ctree_args *oca
 
 	disk_super = fs_info->super_copy;
 	if (flags & OPEN_CTREE_RECOVER_SUPER)
-		ret = btrfs_read_dev_super(fs_devices->latest_bdev, disk_super,
+		ret = btrfs_read_dev_super_mp(fs_devices->latest_bdev, disk_super,
 				sb_bytenr, SBREAD_RECOVER);
 	else if (flags & OPEN_CTREE_USE_LATEST_BDEV)
-		ret = btrfs_read_dev_super(fs_devices->latest_bdev, disk_super,
+		ret = btrfs_read_dev_super_mp(fs_devices->latest_bdev, disk_super,
 					   sb_bytenr, sbflags);
 	else
-		ret = btrfs_read_dev_super(fp, disk_super, sb_bytenr,
+		ret = btrfs_read_dev_super_mp(fp, disk_super, sb_bytenr,
 				sbflags);
 	if (ret) {
 		printk("No valid btrfs found\n");
@@ -1586,8 +1586,8 @@ static struct btrfs_fs_info *__open_ctree_fd(int fp, struct open_ctree_args *oca
 		fprintf(stderr, "ERROR: Filesystem UUID change in progress\n");
 		goto out_devices;
 	}
-    printf("Bytenr of Disk super is %llu\n", disk_super->bytenr);
-    printf("Nodeside of Disk super is %llu\n", disk_super->nodesize);
+    //printf("Bytenr of Disk super is %llu\n", disk_super->bytenr);
+    //printf("Nodeside of Disk super is %llu\n", disk_super->nodesize);
 	/* CHECK: ignore_csum_mismatch */
 
 	ASSERT(!memcmp(disk_super->fsid, fs_devices->fsid, BTRFS_FSID_SIZE));
@@ -2017,6 +2017,108 @@ int btrfs_read_dev_super(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
 	return transid > 0 ? 0 : -1;
 }
 
+int btrfs_read_dev_super_mp(int fd, struct btrfs_super_block *sb, u64 sb_bytenr,
+			 unsigned sbflags)
+{
+	u8 fsid[BTRFS_FSID_SIZE];
+	u8 metadata_uuid[BTRFS_FSID_SIZE];
+	int fsid_is_initialized = 0;
+	struct btrfs_super_block buf;
+	int i;
+	int ret;
+	int max_super = sbflags & SBREAD_RECOVER ? BTRFS_SUPER_MIRROR_MAX : 1;
+	//int max_super = 1;
+    u64 transid = 0;
+	bool metadata_uuid_set = false;
+	u64 bytenr;
+
+    u64 sb_offset = 0;
+    if (sb_bytenr < BTRFS_SUPER_INFO_OFFSET_1) {
+        sb_offset = sb_bytenr - BTRFS_SUPER_INFO_OFFSET;
+    } else if (sb_bytenr < BTRFS_SUPER_INFO_OFFSET_2) {
+        sb_offset = sb_bytenr - BTRFS_SUPER_INFO_OFFSET_1;
+    } else {
+        sb_offset = sb_bytenr - BTRFS_SUPER_INFO_OFFSET_2;
+    }
+
+	//if (sb_bytenr != BTRFS_SUPER_INFO_OFFSET) {
+	//	ret = sbread(fd, &buf, sb_bytenr);
+        //printf("Ret from read dev super is %d\n", ret);
+		/* real error */
+	//	if (ret < 0)
+	//		return -errno;
+
+		/* Not large enough sb, return -ENOENT instead of normal -EIO */
+	//	if (ret < BTRFS_SUPER_INFO_SIZE)
+	//		return -ENOENT;
+        /*
+        printf("1. In btrfs_read_dev_super\n");
+        printf("2. Current sb_bytenr is %llu\n", sb_bytenr);
+        printf("3. sb_bytenr from buf is %llu\n", btrfs_super_bytenr(&buf));
+		*/
+
+      //  if (btrfs_super_bytenr(&buf) != sb_bytenr)
+		//	return -EIO;
+        
+	//	ret = btrfs_check_super(&buf, sbflags);
+	//	if (ret < 0)
+	//		return ret;
+	//	memcpy(sb, &buf, BTRFS_SUPER_INFO_SIZE);
+	//	return 0;
+	//}
+
+	/*
+	* we would like to check all the supers, but that would make
+	* a btrfs mount succeed after a mkfs from a different FS.
+	* So, we need to add a special mount option to scan for
+	* later supers, using BTRFS_SUPER_MIRROR_MAX instead
+	*/
+
+	for (i = 0; i < max_super; i++) {
+		bytenr = btrfs_sb_offset_mp(i, sb_offset);
+		ret = sbread(fd, &buf, bytenr);
+
+		if (ret < BTRFS_SUPER_INFO_SIZE)
+			break;
+
+		if (btrfs_super_bytenr(&buf) != bytenr )
+			continue;
+		/* if magic is NULL, the device was removed */
+		if (btrfs_super_magic(&buf) == 0 && i == 0)
+			break;
+		if (btrfs_check_super(&buf, sbflags))
+			continue;
+
+		if (!fsid_is_initialized) {
+			if (btrfs_super_incompat_flags(&buf) &
+			    BTRFS_FEATURE_INCOMPAT_METADATA_UUID) {
+				metadata_uuid_set = true;
+				memcpy(metadata_uuid, buf.metadata_uuid,
+				       sizeof(metadata_uuid));
+			}
+			memcpy(fsid, buf.fsid, sizeof(fsid));
+			fsid_is_initialized = 1;
+		} else if (memcmp(fsid, buf.fsid, sizeof(fsid)) ||
+			   (metadata_uuid_set && memcmp(metadata_uuid,
+							buf.metadata_uuid,
+							sizeof(metadata_uuid)))) {
+			/*
+			 * the superblocks (the original one and
+			 * its backups) contain data of different
+			 * filesystems -> the super cannot be trusted
+			 */
+			continue;
+		}
+
+		if (btrfs_super_generation(&buf) > transid) {
+			memcpy(sb, &buf, BTRFS_SUPER_INFO_SIZE);
+			transid = btrfs_super_generation(&buf);
+		}
+	}
+
+	return transid > 0 ? 0 : -1;
+}
+
 static bool check_sb_location(struct btrfs_device *device, u64 bytenr)
 {
 	if (!device->zone_info)
@@ -2074,6 +2176,96 @@ static int write_dev_supers(struct btrfs_fs_info *fs_info,
 
 	for (i = 0; i < BTRFS_SUPER_MIRROR_MAX; i++) {
 		bytenr = btrfs_sb_offset(i);
+		if (!check_sb_location(device, bytenr))
+			break;
+
+		btrfs_set_super_bytenr(sb, bytenr);
+
+		btrfs_csum_data(fs_info, csum_type, (u8 *)sb + BTRFS_CSUM_SIZE,
+				result, BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
+		memcpy(&sb->csum[0], result, BTRFS_CSUM_SIZE);
+
+		/*
+		 * super_copy is BTRFS_SUPER_INFO_SIZE bytes and is
+		 * zero filled, we can use it directly
+		 */
+		ret = sbwrite(device->fd, fs_info->super_copy, bytenr);
+		if (ret != BTRFS_SUPER_INFO_SIZE) {
+			errno = EIO;
+			error(
+		"failed to write super block for devid %llu: write error: %m",
+				device->devid);
+			return -errno;
+		}
+		/*
+		 * Flush after the primary sb write, this is the equivalent of
+		 * kernel post-flush for FUA write.
+		 */
+		if (i == 0) {
+			ret = fsync(device->fd);
+			if (ret < 0) {
+				error(
+		"failed to write super block for devid %llu: flush error: %m",
+					device->devid);
+				return -errno;
+			}
+		}
+	}
+
+	return 0;
+}
+
+static int write_dev_supers_mp(struct btrfs_fs_info *fs_info,
+			    struct btrfs_super_block *sb,
+			    struct btrfs_device *device)
+{
+	u64 bytenr;
+	u8 result[BTRFS_CSUM_SIZE];
+	int i, ret;
+	u16 csum_type = btrfs_super_csum_type(sb);
+
+	/*
+	 * We need to write super block after all metadata written.
+	 * This is the equivalent of kernel pre-flush for FUA.
+	 */
+	ret = fsync(device->fd);
+	if (ret < 0) {
+		error(
+		"failed to write super block for devid %llu: flush error: %m",
+			device->devid);
+		return -errno;
+	}
+	if (fs_info->super_bytenr != BTRFS_SUPER_INFO_OFFSET_1) {
+		btrfs_set_super_bytenr(sb, fs_info->super_bytenr);
+		btrfs_csum_data(fs_info, csum_type, (u8 *)sb + BTRFS_CSUM_SIZE,
+				result, BTRFS_SUPER_INFO_SIZE - BTRFS_CSUM_SIZE);
+		memcpy(&sb->csum[0], result, BTRFS_CSUM_SIZE);
+
+		/*
+		 * super_copy is BTRFS_SUPER_INFO_SIZE bytes and is
+		 * zero filled, we can use it directly
+		 */
+		ret = sbwrite(device->fd, fs_info->super_copy, fs_info->super_bytenr);
+		if (ret != BTRFS_SUPER_INFO_SIZE) {
+			errno = EIO;
+			error(
+		"failed to write super block for devid %llu: write error: %m",
+				device->devid);
+			return -EIO;
+		}
+		ret = fsync(device->fd);
+		if (ret < 0) {
+			error(
+		"failed to write super block for devid %llu: flush error: %m",
+				device->devid);
+			return -errno;
+		}
+		return 0;
+	}
+
+    u64 sb_offset = fs_info->super_bytenr - BTRFS_SUPER_INFO_OFFSET;
+	for (i = 0; i < BTRFS_SUPER_MIRROR_MAX; i++) {
+		bytenr = btrfs_sb_offset_mp(i, sb_offset);
 		if (!check_sb_location(device, bytenr))
 			break;
 
@@ -2228,7 +2420,7 @@ int write_all_supers(struct btrfs_fs_info *fs_info)
 		flags = btrfs_super_flags(sb);
 		btrfs_set_super_flags(sb, flags | BTRFS_HEADER_FLAG_WRITTEN);
 
-		ret = write_dev_supers(fs_info, sb, dev);
+		ret = write_dev_supers_mp(fs_info, sb, dev);
 		if (ret < 0)
 			return ret;
 	}

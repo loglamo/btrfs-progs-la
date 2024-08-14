@@ -104,7 +104,7 @@ struct btrfs_mkfs_config {
 };
 
 int make_btrfs(int fd, struct btrfs_mkfs_config *cfg);
-int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg);
+int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg, int iter);
 int btrfs_make_root_dir(struct btrfs_trans_handle *trans,
 			struct btrfs_root *root, u64 objectid);
 u64 btrfs_min_dev_size(u32 nodesize, bool mixed, u64 zone_size, u64 meta_profile,

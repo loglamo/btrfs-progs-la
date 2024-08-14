@@ -455,7 +455,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	btrfs_set_super_generation(&super, 1);
 	btrfs_set_super_root(&super, cfg->blocks[MKFS_ROOT_TREE]);
 	btrfs_set_super_chunk_root(&super, cfg->blocks[MKFS_CHUNK_TREE]);
-	btrfs_set_super_total_bytes(&super, num_bytes);
+	btrfs_set_super_total_bytes(&super, cfg->num_bytes);
 	btrfs_set_super_bytes_used(&super, total_used);
 	btrfs_set_super_sectorsize(&super, cfg->sectorsize);
 	super.__unused_leafsize = cpu_to_le32(cfg->nodesize);
@@ -597,7 +597,7 @@ int make_btrfs(int fd, struct btrfs_mkfs_config *cfg)
 	dev_item = btrfs_item_ptr(buf, nritems, struct btrfs_dev_item);
 	btrfs_set_device_id(buf, dev_item, 1);
 	btrfs_set_device_generation(buf, dev_item, 0);
-	btrfs_set_device_total_bytes(buf, dev_item, num_bytes);
+	btrfs_set_device_total_bytes(buf, dev_item, cfg->num_bytes);
 	btrfs_set_device_bytes_used(buf, dev_item, system_group_size);
 	btrfs_set_device_io_align(buf, dev_item, cfg->sectorsize);
 	btrfs_set_device_io_width(buf, dev_item, cfg->sectorsize);
@@ -756,7 +756,7 @@ out:
 	free(buf);
 	return ret;
 }
-int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg)
+int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg, int iter)
 {
 	struct btrfs_super_block super;
 	struct extent_buffer *buf;
@@ -820,7 +820,7 @@ int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg)
 	if (!buf)
 		return -ENOMEM;
 
-	first_free = BTRFS_SUPER_INFO_OFFSET + cfg->sectorsize * 2 - 1;
+	first_free = BTRFS_SUPER_INFO_OFFSET + BTRFS_SUPER_INFO_SIZE*iter + cfg->sectorsize * 2 - 1;
 	first_free &= ~((u64)cfg->sectorsize - 1);
 
 	memset(&super, 0, sizeof(super));
@@ -840,7 +840,7 @@ int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg)
 	}
 	uuid_generate(chunk_tree_uuid);
 
-    int k = 1;
+    int k = iter;
 
 	for (i = 0; i < blocks_nr; i++) {
 		blk = blocks[i];
@@ -850,15 +850,17 @@ int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg)
 
 	btrfs_set_super_bytenr(&super, BTRFS_SUPER_INFO_OFFSET + BTRFS_SUPER_INFO_SIZE*k);
     // La: for mpart
+    printf("----------------------\n");
     printf("sb %d is at %llu\n", k, super.bytenr);
     cfg->super_bytenr = super.bytenr;
-    cfg->chunk_tree_bytenr = blocks[MKFS_CHUNK_TREE];
+    //cfg->chunk_tree_bytenr = blocks[MKFS_CHUNK_TREE];
 
     btrfs_set_super_num_devices(&super, 1);
 	btrfs_set_super_magic(&super, BTRFS_MAGIC_TEMPORARY);
 	btrfs_set_super_generation(&super, 1);
 	btrfs_set_super_root(&super, cfg->blocks[MKFS_ROOT_TREE]);
 	btrfs_set_super_chunk_root(&super, cfg->blocks[MKFS_CHUNK_TREE]);
+    printf("super_chunk_root is %llu\n", cfg->blocks[MKFS_CHUNK_TREE]);
 	btrfs_set_super_total_bytes(&super, num_bytes);
 	btrfs_set_super_bytes_used(&super, total_used);
 	btrfs_set_super_sectorsize(&super, cfg->sectorsize);
@@ -910,10 +912,10 @@ int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg)
 		blk = blocks[i];
 
 		/* Add the block group item for our temporary chunk. */
-		if (cfg->blocks[blk] > system_group_offset + num_bytes*k && add_block_group) {
+		if (cfg->blocks[blk] > system_group_offset + cfg->num_bytes*k && add_block_group) {
 			itemoff -= sizeof(struct btrfs_block_group_item);
 			write_block_group_item(buf, nritems,
-					       system_group_offset + num_bytes*k,
+					       system_group_offset + cfg->num_bytes*k,
 					       system_group_size, total_used,
 					       BTRFS_FIRST_CHUNK_TREE_OBJECTID,
 					       itemoff);
@@ -1002,7 +1004,7 @@ int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg)
 	dev_item = btrfs_item_ptr(buf, nritems, struct btrfs_dev_item);
 	btrfs_set_device_id(buf, dev_item, 1);
 	btrfs_set_device_generation(buf, dev_item, 0);
-	btrfs_set_device_total_bytes(buf, dev_item, num_bytes);
+	btrfs_set_device_total_bytes(buf, dev_item, cfg->num_bytes);
 	btrfs_set_device_bytes_used(buf, dev_item, system_group_size);
 	btrfs_set_device_io_align(buf, dev_item, cfg->sectorsize);
 	btrfs_set_device_io_width(buf, dev_item, cfg->sectorsize);
@@ -1024,7 +1026,7 @@ int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg)
 
 	/* then we have chunk 0 */
 	btrfs_set_disk_key_objectid(&disk_key, BTRFS_FIRST_CHUNK_TREE_OBJECTID);
-	btrfs_set_disk_key_offset(&disk_key, system_group_offset + num_bytes*k);
+	btrfs_set_disk_key_offset(&disk_key, system_group_offset + cfg->num_bytes*k);
 	btrfs_set_disk_key_type(&disk_key, BTRFS_CHUNK_ITEM_KEY);
 	btrfs_set_item_key(buf, &disk_key, nritems);
 	btrfs_set_item_offset(buf, nritems, itemoff);
@@ -1041,7 +1043,7 @@ int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg)
 	btrfs_set_chunk_num_stripes(buf, chunk, 1);
 	btrfs_set_stripe_devid_nr(buf, chunk, 0, 1);
 	btrfs_set_stripe_offset_nr(buf, chunk, 0,
-				   system_group_offset + num_bytes*k);
+				   system_group_offset + cfg->num_bytes*k);
 	nritems++;
 
 	write_extent_buffer(buf, super.dev_item.uuid,
@@ -1080,7 +1082,7 @@ int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg)
 	itemoff = cfg->leaf_data_size - sizeof(struct btrfs_dev_extent);
 
 	btrfs_set_disk_key_objectid(&disk_key, 1);
-	btrfs_set_disk_key_offset(&disk_key, system_group_offset + num_bytes*k);
+	btrfs_set_disk_key_offset(&disk_key, system_group_offset + cfg->num_bytes*k);
 	btrfs_set_disk_key_type(&disk_key, BTRFS_DEV_EXTENT_KEY);
 	btrfs_set_item_key(buf, &disk_key, nritems);
 	btrfs_set_item_offset(buf, nritems, itemoff);
@@ -1091,7 +1093,7 @@ int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg)
 	btrfs_set_dev_extent_chunk_objectid(buf, dev_extent,
 					BTRFS_FIRST_CHUNK_TREE_OBJECTID);
 	btrfs_set_dev_extent_chunk_offset(buf, dev_extent,
-					  system_group_offset + num_bytes*k);
+					  system_group_offset + cfg->num_bytes*k);
 
 	write_extent_buffer(buf, chunk_tree_uuid,
 		    (unsigned long)btrfs_dev_extent_chunk_tree_uuid(dev_extent),
@@ -1124,16 +1126,16 @@ int make_btrfs_mp(int fd, struct btrfs_mkfs_config *cfg)
 		goto out;
 
 	if (free_space_tree) {
-		ret = create_free_space_tree(fd, cfg, buf, system_group_offset + num_bytes*k,
+		ret = create_free_space_tree(fd, cfg, buf, system_group_offset + cfg->num_bytes*k,
 					     system_group_size,
-					     system_group_offset + num_bytes*k + total_used);
+					     system_group_offset + cfg->num_bytes*k + total_used);
 		if (ret)
 			goto out;
 	}
     // La: test bg tree
 	if (block_group_tree) {
 		ret = create_block_group_tree(fd, cfg, buf,
-					      system_group_offset + num_bytes*k,
+					      system_group_offset + cfg->num_bytes*k,
 					      system_group_size, 
                           total_used);
                           //num_bytes*k + total_used);
